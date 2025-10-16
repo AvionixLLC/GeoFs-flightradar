@@ -1,0 +1,750 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <meta charset="utf-8" />
+  <title>GeoFS ATC Screen</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html,body,#map { height:100%; margin:0; padding:0; }
+    .label {
+      font-family: Inter, "Noto Sans TC", Arial, sans-serif;
+      font-size: 12px;
+      padding: 2px 6px;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.8);
+      color: #fff;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.5);
+      white-space: nowrap;
+      margin-left: 6px;
+    }
+    .label.emergency {
+      background: rgba(139, 0, 0, 0.95);
+      animation: pulse 1s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+      50% { box-shadow: 0 0 15px rgba(255,0,0,0.8); }
+    }
+    .legend {
+      position: absolute;
+      left: 10px;
+      top: 10px;
+      background: rgba(146, 146, 146, 0.9);
+      padding:8px 10px;
+      border-radius:6px;
+      font-size:12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    }
+    .altitude-legend {
+      position: absolute;
+      left: 10px;
+      bottom: 10px;
+      background: rgba(146, 146, 146, 0.9);
+      padding:8px 10px;
+      border-radius:6px;
+      font-size:11px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+      min-width: 140px;
+    }
+    .altitude-legend-item {
+      display: flex;
+      align-items: center;
+      margin: 2px 0;
+    }
+    .altitude-color-box {
+      width: 12px;
+      height: 12px;
+      margin-right: 6px;
+      border-radius: 2px;
+    }
+    .waypoint-tooltip {
+      font-size: 11px !important;
+      padding: 3px 6px !important;
+      background: rgba(0, 0, 0, 0.85) !important;
+      border: 1px solid #ff6600 !important;
+      border-radius: 4px !important;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3) !important;
+      font-weight: bold;
+      color: #fff !important;
+    }
+    .waypoint-tooltip::before {
+      border-top-color: rgba(0, 0, 0, 0.85) !important;
+    }
+    .waypoint-marker {
+      background: rgba(255, 102, 0, 0.9);
+      border: 3px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      color: #fff;
+      font-size: 10px;
+      text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+    }
+    .waypoint-passed {
+      background: rgba(100, 100, 100, 0.7) !important;
+      border-color: #666 !important;
+    }
+    .waypoint-active {
+      background: rgba(0, 255, 0, 0.9) !important;
+      border-color: #0f0 !important;
+      animation: pulse-active 1.5s ease-in-out infinite;
+    }
+    @keyframes pulse-active {
+      0%, 100% { transform: scale(1); box-shadow: 0 2px 8px rgba(0,255,0,0.4); }
+      50% { transform: scale(1.2); box-shadow: 0 2px 15px rgba(0,255,0,0.8); }
+    }
+    .route-arrow {
+      font-size: 16px;
+      color: #ff6600;
+      text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
+    }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="legend">GeoFS ATC — connected: <span id="connCount">0</span></div>
+<div class="altitude-legend">
+  <div style="font-weight:bold;margin-bottom:4px;">高度圖例</div>
+  <div class="altitude-legend-item"><div class="altitude-color-box" style="background:#ffffff;"></div><span>&lt;100m</span></div>
+  <div class="altitude-legend-item"><div class="altitude-color-box" style="background:#ffff00;"></div><span>100m+</span></div>
+  <div class="altitude-legend-item"><div class="altitude-color-box" style="background:#00ff00;"></div><span>~1000m</span></div>
+  <div class="altitude-legend-item"><div class="altitude-color-box" style="background:#00bfff;"></div><span>2500m+</span></div>
+  <div class="altitude-legend-item"><div class="altitude-color-box" style="background:#0000ff;"></div><span>高空</span></div>
+  <div class="altitude-legend-item"><div class="altitude-color-box" style="background:#800080;"></div><span>極高空</span></div>
+  <div class="altitude-legend-item"><div class="altitude-color-box" style="background:#ff0000;"></div><span>最高空</span></div>
+</div>
+<!-- 仿 Flightradar24 底部圖表容器 -->
+<div id="flightChartContainer"
+  style="position:fixed;left:0;right:0;bottom:0;height:180px;background:#222;z-index:99999;
+    padding:12px 10px 0 10px;display:none;box-shadow:0 -2px 12px #000;">
+  <div style="font-family:'Inter','Noto Sans TC',Arial,sans-serif;font-size:14px;color:#fff;font-weight:bold;margin-bottom:3px;">
+    SPEED & ALTITUDE GRAPH
+  </div>
+  <div style="height:155px;padding-bottom:10px;">
+    <canvas id="flightChart"></canvas>
+  </div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+// Chart.js 仿 Flightradar24 風格
+let flightChartObj;
+function showFlightChart(track) {
+  const container = document.getElementById('flightChartContainer');
+  container.style.display = 'block';
+  const ctx = document.getElementById('flightChart').getContext('2d');
+
+  // X 軸用時間（或序號）
+  const labels = track.map((p, i) => {
+    if (p.ts) {
+      const dt = new Date(p.ts);
+      return dt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+    return i + 1;
+  });
+  const altitudes = track.map(p => Math.round(p.alt));
+  const speeds = track.map(p => Math.round(formatSpeed(p.speed)));
+
+  if (!flightChartObj) {
+    // 第一次建立
+    flightChartObj = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            label: 'Ground Speed',
+            data: speeds,
+            borderColor: '#ffd300',
+            backgroundColor: 'rgba(255,211,0,0.07)',
+            pointRadius: 2,
+            yAxisID: 'y-speed',
+            tension: 0.25
+          },
+          {
+            label: 'Altitude',
+            data: altitudes,
+            borderColor: '#00b4ff',
+            backgroundColor: 'rgba(0,180,255,0.07)',
+            pointRadius: 2,
+            yAxisID: 'y-alt',
+            tension: 0.25
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            display: true,
+            labels: {
+              color: "#fff",
+              font: { family: 'Inter', size: 14, weight: 'bold' }
+            }
+          },
+          tooltip: {
+            enabled: true,
+            backgroundColor: "#222",
+            borderColor: "#ffd300",
+            borderWidth: 2,
+            callbacks: {
+              title: (items) => {
+                const idx = items[0].dataIndex;
+                const p = track[idx];
+                if (p.ts)
+                  return new Date(p.ts).toLocaleString('en-GB', { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+                return `Point ${idx+1}`;
+              },
+              label: (item) => {
+                if (item.dataset.label === "Ground Speed")
+                  return `Ground Speed: ${item.formattedValue} kt`;
+                else
+                  return `Altitude: ${item.formattedValue} ft`;
+              }
+            }
+          }
+        },
+        scales: {
+  x: {
+    title: { display: false },
+    ticks: {
+      color: "#fff",
+      font: { size: 11 },
+      maxRotation: 45,
+      minRotation: 0,
+      autoSkip: true,
+      maxTicksLimit: 12,
+      display: true
+    },
+    grid: { color: "#444" },
+    display: true
+  },
+  'y-alt': {
+    type: 'linear',
+    position: 'left',
+    min:0,
+    max:50000,
+    title: {
+      display: true,
+      text: 'Altitude (ft)',
+      color: "#00b4ff",
+      font: { size: 13, weight:'bold' }
+    },
+    grid: { color: "#444" },
+    ticks: { color: "#00b4ff", font: { size: 13 } }
+  },
+  'y-speed': {
+    type: 'linear',
+    position: 'right',
+    min: 0,
+    max:1000,
+    title: {
+      display: true,
+      text: 'Speed (kt)',
+      color: "#ffd300",
+      font: { size: 13, weight:'bold' }
+    },
+    grid: { drawOnChartArea: false },
+    ticks: { color: "#ffd300", font: { size: 13 } }
+  }
+}
+      }
+    });
+  } else {
+    // 平滑更新資料，不 destroy
+    flightChartObj.data.labels = labels;
+    flightChartObj.data.datasets[0].data = speeds;
+    flightChartObj.data.datasets[1].data = altitudes;
+    flightChartObj.update();
+  }
+}
+function hideFlightChart() {
+  document.getElementById('flightChartContainer').style.display = 'none';
+  if (flightChartObj) {
+    flightChartObj.destroy();
+    flightChartObj = null;
+  }
+}
+// 工具函式
+function getAltitudeColor(altFt) {
+  const alt = altFt || 0;
+  if (alt < 330) return "#ffffff";
+  if (alt < 3300) return "#ffff00";
+  if (alt < 8200) return "#00ff00";
+  if (alt < 20000) return "#00bfff";
+  if (alt < 30000) return "#0000ff";
+  if (alt < 40000) return "#800080";
+  return "#ff0000";
+}
+function formatSpeed(speedRaw) {
+  if (typeof speedRaw !== 'number') return '---';
+  let speed = speedRaw;
+  if (speedRaw < 50) speed = speedRaw * 1.94384;
+  return Math.round(speed);
+}
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, function(c) {
+    return {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[c];
+  });
+}
+
+// 地圖設定
+const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors'
+});
+const googleStreet = L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+  attribution: 'Map data &copy; Google'
+});
+const googleSat = L.tileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', {
+  attribution: 'Map data &copy; Google'
+});
+const openAIP = L.tileLayer(
+  'https://api.tiles.openaip.net/api/data/openaip/{z}/{x}/{y}.png?apiKey=409a25682b90c26541b6c25493950e17',
+  {
+    attribution: '&copy; <a href="https://www.openaip.net/">OpenAIP</a>',
+    maxZoom: 18,
+    maxNativeZoom: 14,
+    transparent: true,
+    opacity: 0.8
+  }
+);
+const osmWithOpenAIP = L.layerGroup([osmLayer, openAIP]);
+const map = L.map('map', {
+  worldCopyJump: false,
+  maxZoom: 18,
+  minZoom: 2,
+  maxBounds: [[-85, -360], [85, 360]],
+  layers: [googleSat]
+}).setView([20,0],2);
+
+// 新增 waypointPane (z-index 比 tilePane高,比overlayPane低)
+map.createPane('waypointPane');
+map.getPane('waypointPane').style.zIndex = 550;
+
+L.control.layers({
+  "OpenStreetMap + OpenAIP": osmWithOpenAIP,
+  "Google Streets": googleStreet,
+  "Google Satellite": googleSat
+}).addTo(map);
+
+// Canvas renderer
+const canvasRenderer = L.canvas();
+
+const aircrafts = new Map();
+const PLANE_IMG = "https://i.ibb.co/6cNhyMMj/1.png";
+let focusedAircraftId = null;
+let flightPlanMarkers = [];
+
+function clearFlightPlanMarkers() {
+  flightPlanMarkers.forEach(m => map.removeLayer(m));
+  flightPlanMarkers = [];
+}
+
+function makeDivIcon(data){
+  const imgW=32,imgH=32,labelW=150,labelH=60,iconW=imgW+labelW,iconH=Math.max(imgH,labelH);
+  const color=getAltitudeColor(data.alt);
+  const isEmergency = data.squawk === '7700';
+  const labelClass = isEmergency ? 'label emergency' : 'label';
+  const squawkText = data.squawk ? `SQK:${escapeHtml(data.squawk)}` : '';
+  const depShort = (data.departure||'').substring(0, 4);
+  const arrShort = (data.arrival||'').substring(0, 4);
+  
+  return L.divIcon({
+    html:`
+      <div style="display:flex;align-items:center;width:${iconW}px;height:${iconH}px;">
+        <img src="${PLANE_IMG}" width="${imgW}" height="${imgH}" style="transform:rotate(${data.heading||0}deg);"/>
+        <div class="${labelClass}" style="border-left:3px solid ${color};">
+          <strong>${escapeHtml(data.callsign||'UNK')}</strong>
+          <div style="font-size:11px;">
+            ${escapeHtml(data.type||'??')} · <span style="color:${color};font-weight:bold;">${Math.round(data.alt||0)}ft</span> · ${formatSpeed(data.speed)}kt
+          </div>
+          <div style="font-size:11px;">${escapeHtml(data.flightNo||'')} ${escapeHtml(depShort)}→${escapeHtml(arrShort)}</div>
+          ${squawkText ? `<div style="font-size:11px;font-weight:bold;color:#ffff00;">${squawkText}</div>` : ''}
+        </div>
+      </div>`,
+    className:'',iconSize:[iconW,iconH],iconAnchor:[imgW/2,iconH/2]
+  });
+}
+
+function crossesIDL(lon1, lon2) {
+  return Math.abs(lon1 - lon2) > 180;
+}
+function crossesTooFar(lat1, lon1, lat2, lon2, maxDistanceKm = 100) {
+  return calculateDistance(lat1, lon1, lat2, lon2) > maxDistanceKm;
+}
+
+// 軌跡
+function showAircraftTrack(id) {
+  const obj = aircrafts.get(id);
+  if (!obj || !obj.rawPathForDisplay || obj.rawPathForDisplay.length === 0) return;
+  clearAllAircraftTracks();
+  const simplified = obj.rawPathForDisplay.map(p => [p[0], p[1], p[2], p[3]]);
+  obj.displayPath = simplified;
+  for (let i = 1; i < obj.displayPath.length; i++) {
+    const prev = obj.displayPath[i-1];
+    const curr = obj.displayPath[i];
+    const alt = curr[2] || 0;
+    if (crossesIDL(prev[1], curr[1]) || crossesTooFar(prev[0], prev[1], curr[0], curr[1])) continue;
+    const seg = L.polyline(
+      [ [prev[0], prev[1]], [curr[0], curr[1]] ],
+      { renderer: canvasRenderer, color: getAltitudeColor(alt), weight: 2, opacity: 0.8 }
+    ).addTo(map);
+    seg.bindTooltip(`${Math.round(alt)} ft`, {
+      sticky: true,
+      direction: 'right',
+      offset: [10, 0]
+    });
+    obj.segments.push(seg);
+  }
+}
+function clearAllAircraftTracks() {
+  for (const [id, obj] of aircrafts.entries()) {
+    if (obj.segments && obj.segments.length > 0) {
+      obj.segments.forEach(s => map.removeLayer(s));
+      obj.segments = [];
+    }
+  }
+}
+
+// 更新飛機
+const aircraftMeta = new Map();
+function ensureMeta(id) {
+  if (!aircraftMeta.has(id)) {
+    aircraftMeta.set(id, { lastRender: 0, pending: null });
+  }
+}
+function updateAircraft(id, data, trackPoint = null) {
+  ensureMeta(id);
+
+  // 取得前一次資料
+  let prev = null;
+  if (aircrafts.has(id)) {
+    prev = aircrafts.get(id).data;
+  }
+
+  // 判斷是否暫停
+  let paused = false;
+  if (prev) {
+    paused =
+      prev.alt === data.alt &&
+      prev.speed === data.speed &&
+      prev.heading === data.heading &&
+      prev.lat === data.lat &&
+      prev.lon === data.lon;
+  }
+
+  // 設定 paused 狀態
+  if (aircrafts.has(id)) {
+    aircrafts.get(id).paused = paused;
+    const obj = aircrafts.get(id);
+    const el = obj.marker.getElement && obj.marker.getElement();
+    if (el) el.style.opacity = paused ? "0.3" : "1";
+    if (paused) return; // 直接 return，不記錄資料、不更新
+  }
+
+  // 只有沒 paused 時才 push 新資料到 rawTrack 跟 rawPathForDisplay
+  const latlng = [data.lat, data.lon];
+  const color = getAltitudeColor(data.alt);
+  const isEmergency = data.squawk === '7700';
+  const labelClass = isEmergency ? 'label emergency' : 'label';
+  const squawkText = data.squawk ? `SQK:${escapeHtml(data.squawk)}` : '';
+  const now = Date.now();
+
+  ensureMeta(id);
+  if (aircrafts.has(id)) {
+    const obj = aircrafts.get(id);
+    obj.lastSeen = now;
+    obj.data = data;
+    if (!obj.paused) { // 只有沒 paused 才記錄資料
+      if (trackPoint) {
+        if (!obj.rawTrack) obj.rawTrack = [];
+        obj.rawTrack.push({lat: data.lat, lon: data.lon, ts: now, alt: data.alt, speed: data.speed});
+        if (obj.rawTrack.length > 20000) obj.rawTrack.shift();
+      }
+      if (!obj.rawPathForDisplay) obj.rawPathForDisplay = [];
+      obj.rawPathForDisplay.push([data.lat, data.lon, data.alt, data.speed]);
+    }
+    const meta = aircraftMeta.get(id);
+    const elapsed = now - meta.lastRender;
+    let shouldRender = false;
+    if (elapsed >= 1000) shouldRender = true;
+    else if (obj.displayPath && obj.displayPath.length > 0) {
+      const prevPath = obj.displayPath[obj.displayPath.length-1];
+      const d = calculateDistance(prevPath[0], prevPath[1], latlng[0], latlng[1]);
+      if (d > 1) shouldRender = true;
+    } else shouldRender = true;
+    if (shouldRender && !meta.pending) {
+      meta.pending = () => {
+        const m = obj.marker;
+        m.setLatLng(latlng);
+        const el = m.getElement && m.getElement();
+        if (el) {
+          const img = el.querySelector('img');
+          if (img) img.style.transform = `rotate(${data.heading || 0}deg)`;
+          const label = el.querySelector('.label');
+          if (label) {
+            const depShort = (data.departure||'').substring(0, 4);
+            const arrShort = (data.arrival||'').substring(0, 4);
+            label.className = labelClass;
+            label.innerHTML = `<strong>${escapeHtml(data.callsign||'UNK')}</strong>
+              <div style="font-size:11px;">${escapeHtml(data.type||'??')} · <span style="color:${color};font-weight:bold;">${Math.round(data.alt||0)}ft</span> · ${formatSpeed(data.speed)}kt</div>
+              <div style="font-size:11px;">${escapeHtml(data.flightNo||'')} ${escapeHtml(depShort)}→${escapeHtml(arrShort)}</div>
+              ${squawkText ? `<div style="font-size:11px;font-weight:bold;color:#ffff00;">${squawkText}</div>` : ''}`;
+            label.style.borderLeft = `3px solid ${color}`;
+          }
+        } else {
+          m.setIcon(makeDivIcon(data));
+        }
+        meta.lastRender = Date.now();
+        meta.pending = null;
+        document.getElementById('connCount').textContent = aircrafts.size;
+        if (id === focusedAircraftId) {
+          showAircraftTrack(id);
+        }
+      };
+      requestAnimationFrame(meta.pending);
+    }
+  } else {
+    const marker = L.marker(latlng, {icon: makeDivIcon(data)}).addTo(map);
+    marker.on('click', () => {
+      clearAllAircraftTracks();
+      focusedAircraftId = id;
+      showAircraftTrack(id);
+      showAircraftPanel(data, id);
+    });
+    aircrafts.set(id, {
+      marker,
+      displayPath: trackPoint ? [[data.lat, data.lon, data.alt, data.speed]] : [],
+      rawTrack: trackPoint ? [{lat:data.lat, lon:data.lon, ts:now, alt:data.alt, speed: data.speed}] : [],
+      rawPathForDisplay: trackPoint ? [[data.lat, data.lon, data.alt, data.speed]] : [],
+      segments: [],
+      lastSeen: now,
+      data,
+      paused: false
+    });
+    aircraftMeta.get(id).lastRender = now;
+  }
+  if (id === focusedAircraftId) {
+    showAircraftPanel(data, id);
+  }
+}
+function removeAircraft(id) {
+  if (aircrafts.has(id)) {
+    const o = aircrafts.get(id);
+    map.removeLayer(o.marker);
+    o.segments.forEach(s => map.removeLayer(s));
+    aircrafts.delete(id);
+    document.getElementById('connCount').textContent = aircrafts.size;
+  }
+}
+
+// Panel
+function showAircraftPanel(data, id) {
+  clearFlightPlanMarkers();
+  let plan = data.flightPlan;
+  if (typeof plan === 'string') {
+    try {
+      plan = JSON.parse(plan);
+    } catch (err) {
+      plan = null;
+    }
+  }
+  if (plan && Array.isArray(plan) && plan.length) {
+    const latlngs = [];
+    plan.forEach((wp, i) => {
+      const lat = Number(wp.lat),
+          lon = Number(wp.lon);
+      if (isNaN(lat) || isNaN(lon)) return;
+      const label = wp.ident || wp.name || ('WP' + (i + 1));
+      const waypointIcon = L.icon({
+        iconUrl: 'https://i.ibb.co/VWH3qBpX/2.png',
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
+        tooltipAnchor: [0, -12]
+      });
+      // 加入 pane 屬性
+      const m = L.marker([lat, lon], {
+        icon: waypointIcon,
+        pane: 'waypointPane'
+      }).addTo(map).bindTooltip(label, {
+        permanent: false,
+        direction: 'top',
+        className: 'waypoint-tooltip',
+        offset: [0, -12]
+      });
+      flightPlanMarkers.push(m);
+      latlngs.push([lat, lon]);
+    });
+    if (latlngs.length > 1) {
+      // 加入 pane 屬性
+      const route = L.polyline(latlngs, {
+        color: '#CEA5D5',
+        weight: 4,
+        opacity: 1,
+        dashArray: '8 8',
+        pane: 'waypointPane'
+      }).addTo(map);
+      flightPlanMarkers.push(route);
+    }
+  }
+  
+  let waypointsHtml = '';
+  if (plan && Array.isArray(plan) && plan.length) {
+    waypointsHtml = `<div style="margin-top:6px;"><strong>未來航點:</strong>
+      <ol style="margin:4px 0 0 16px;padding:0;font-size:12px;">${
+        plan.map((wp, i) =>
+          `<li>${escapeHtml(wp.ident || wp.name || ('WP'+(i+1)))} (${Number(wp.lat).toFixed(3)}, ${Number(wp.lon).toFixed(3)})${
+            wp.alt ? ' @'+Math.round(Number(wp.alt))+'ft' : ''
+          }</li>`
+        ).join('')
+      }</ol></div>`;
+  }
+
+  let p = document.getElementById('aircraftPanel');
+  if (!p) {
+    p = document.createElement('div');
+    p.id = 'aircraftPanel';
+    Object.assign(p.style, {
+      position: 'absolute', top: '50px', right: '10px', width: '250px',
+      background: 'rgba(0,0,0,0.85)',
+      color: '#fff',
+      borderRadius: '8px', padding: '10px',
+      boxShadow: '0 2px 6px rgba(0,0,0,0.7)',
+      fontSize: '13px', zIndex: 9999
+    });
+    document.body.appendChild(p);
+  }
+  const c = getAltitudeColor(data.alt);
+  const isEmergency = data.squawk === '7700';
+  const emergencyBadge = isEmergency ? '<div style="background:#8B0000;padding:4px;border-radius:4px;margin-top:5px;font-weight:bold;text-align:center;">⚠️ EMERGENCY - 7700 ⚠️</div>' : '';
+  const depShort = (data.departure||'').substring(0, 4);
+  const arrShort = (data.arrival||'').substring(0, 4);
+
+  p.innerHTML = `
+    <h3 style="margin:0 0 5px;border-left:3px solid ${c};padding-left:8px;">${escapeHtml(data.callsign || 'UNK')}</h3>
+    ${emergencyBadge}
+    <div><strong>Flight:</strong> ${escapeHtml(data.flightNo || '')}</div>
+    <div><strong>Route:</strong> ${escapeHtml(depShort)} → ${escapeHtml(arrShort)}</div>
+    <div><strong>Aircraft:</strong> ${escapeHtml(data.type || '')}</div>
+    <div><strong>Altitude:</strong> <span style="color:${c};font-weight:bold;">${Math.round(data.alt || 0)} ft</span></div>
+    <div><strong>Speed:</strong> ${formatSpeed(data.speed)} kt</div>
+    <div><strong>Squawk:</strong> ${escapeHtml(data.squawk || '—')}</div>
+    <div><strong>Takeoff (UTC):</strong> ${escapeHtml(data.takeoffTime || '—')}</div>
+    <button onclick="document.getElementById('aircraftPanel').remove();clearAllAircraftTracks();focusedAircraftId=null;clearFlightPlanMarkers();hideFlightChart();" style="margin-top:8px;padding:4px 8px;">Close</button>`;
+    // 顯示飛行軌跡圖表
+  let trackArr = [];
+  if (aircrafts.has(id)) {
+    const obj = aircrafts.get(id);
+    if (obj.rawTrack && obj.rawTrack.length > 2) {
+      trackArr = obj.rawTrack; // 不切片，全部都顯示
+    } else if (obj.rawPathForDisplay && obj.rawPathForDisplay.length > 2) {
+      trackArr = obj.rawPathForDisplay.map(tp => ({
+        alt: tp[2],
+        speed: tp[3]
+      }));
+}
+  }
+  if (trackArr.length > 2) {
+    showFlightChart(trackArr);
+  } else {
+    hideFlightChart();
+  }
+}
+
+// WebSocket
+let ws;
+function connectWS() {
+  ws = new WebSocket(WS_URL);
+  ws.addEventListener('open', () => ws.send(JSON.stringify({type: 'hello', role: 'atc'})));
+  ws.addEventListener('message', ev => {
+    try {
+      const m = JSON.parse(ev.data);
+      if (m.type === 'aircraft_update') {
+        (Array.isArray(m.payload) ? m.payload : [m.payload]).forEach(a => 
+          updateAircraft(a.id, a, m.trackPoint)
+        );
+      }
+      else if (m.type === 'aircraft_snapshot') {
+        m.payload.forEach(a => updateAircraft(a.id, a));
+      }
+      else if (m.type === 'aircraft_track_history') {
+        const { aircraftId, tracks } = m.payload;
+        if (!aircrafts.has(aircraftId)) {
+          const lastTrack = tracks[tracks.length - 1];
+          const dummyData = {
+            callsign: aircraftId,
+            type: '??',
+            lat: lastTrack.lat,
+            lon: lastTrack.lon,
+            alt: lastTrack.alt,
+            heading: 0,
+            speed: 0,
+            squawk: ''
+          };
+          const marker = L.marker([lastTrack.lat, lastTrack.lon], { icon: makeDivIcon(dummyData) }).addTo(map);
+          marker.on('click', () => {
+            clearAllAircraftTracks();
+            focusedAircraftId = aircraftId;
+            showAircraftTrack(aircraftId);
+            showAircraftPanel(dummyData, aircraftId);
+          });
+          aircrafts.set(aircraftId, {
+            marker,
+            path: [],
+            rawTrack: [],
+            rawPathForDisplay: [],
+            displayPath: [],
+            segments: [],
+            lastSeen: Date.now(),
+            data: dummyData
+          });
+        }
+        const obj = aircrafts.get(aircraftId);
+        if (!obj.rawPathForDisplay) obj.rawPathForDisplay = [];
+        obj.rawPathForDisplay = obj.rawPathForDisplay.concat(
+          tracks.map(t => [t.lat, t.lon, t.alt, t.speed || 0])
+        );
+      }
+      else if (m.type === 'aircraft_track_clear') {
+        const { aircraftId } = m.payload;
+        if (aircrafts.has(aircraftId)) {
+          aircrafts.get(aircraftId).segments.forEach(s => map.removeLayer(s));
+          aircrafts.get(aircraftId).segments = [];
+        }
+      }
+      else if (m.type === 'aircraft_remove') {
+        m.payload.forEach(id => removeAircraft(id));
+      }
+    } catch (e) {
+      console.warn('Message parse error:', e);
+    }
+  });
+  ws.addEventListener('close', () => setTimeout(connectWS, 2000));
+  ws.addEventListener('error', () => ws.close());
+}
+connectWS();
+</script>
+</body>
+</html>
